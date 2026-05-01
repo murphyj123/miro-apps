@@ -317,20 +317,51 @@ export async function placeWithFrames(headers, memberLists, colorFn, titleObj, {
     }
   }
 
-  // 2. Place member-list card images inside each frame
-  for (let i = 0; i < count; i++) {
-    const members = memberLists[i] || [];
-    if (!members.length) continue;
-    const cardSvg = generateSingleCardSVG(headers[i], members, colorFn(i));
-    const cardUrl = svgToDataUrl(cardSvg);
-    const f = frames[i];
-    await miro.board.createImage({
-      url: cardUrl,
-      x: f.x - f.width / 2 + 110,
-      y: f.y - f.height / 2 + 20 + members.length * 12 + 40,
-      width: 200,
-      title: '{}',
+  // 2. Place names as native text items inside each frame, dealing card-style
+  //    Round-robin reveal (row 0 across all groups, then row 1, ...) with small
+  //    delays so remote viewers see each name appear live via Miro's board sync.
+  const lineHeight = 32;
+  const placements = [];
+  for (let g = 0; g < count; g++) {
+    const f = frames[g];
+    const groupNames = memberLists[g] || [];
+    if (!groupNames.length) continue;
+    const totalH = groupNames.length * lineHeight;
+    const startY = f.y - totalH / 2 + lineHeight / 2;
+    for (let i = 0; i < groupNames.length; i++) {
+      placements.push({
+        frame: f,
+        name: groupNames[i],
+        x: f.x,
+        y: startY + i * lineHeight,
+        color: colorFn(g),
+        groupIdx: g,
+        rowIdx: i,
+      });
+    }
+  }
+  placements.sort((a, b) => a.rowIdx - b.rowIdx || a.groupIdx - b.groupIdx);
+
+  // Cap total animation around 5s so it stays snappy for large classes
+  const revealDelay = placements.length > 0
+    ? Math.max(80, Math.min(180, Math.floor(5000 / placements.length)))
+    : 0;
+
+  for (const p of placements) {
+    await miro.board.createText({
+      content: `<p><strong>${escapeXml(p.name)}</strong></p>`,
+      x: p.x,
+      y: p.y,
+      width: Math.max(120, p.frame.width - 40),
+      style: {
+        color: p.color,
+        fontSize: 18,
+        textAlign: 'center',
+      },
     });
+    if (revealDelay > 0) {
+      await new Promise(r => setTimeout(r, revealDelay));
+    }
   }
 
   // 3. Build directory entries and place directory card
@@ -369,22 +400,6 @@ export async function placeWithFrames(headers, memberLists, colorFn, titleObj, {
   if (closeModal) {
     try { miro.board.ui.closeModal(); } catch (_) {}
   }
-}
-
-// ── Single-column card SVG (for inside a frame) ─────────
-function generateSingleCardSVG(title, members, color) {
-  const colW = 200, pad = 12, headerH = 32, rowH = 22;
-  const h = pad * 2 + headerH + members.length * rowH + 8;
-  let svg = '';
-  svg += `<rect x="0" y="0" width="${colW}" height="${h}" rx="8" fill="#fff" stroke="#e2e8f0" stroke-width="1"/>`;
-  svg += `<rect x="0" y="0" width="${colW}" height="${headerH}" rx="8" fill="${color}"/>`;
-  svg += `<rect x="0" y="16" width="${colW}" height="${headerH - 16}" fill="${color}"/>`;
-  const label = title.length > 20 ? title.slice(0, 19) + '\u2026' : title;
-  svg += `<text x="${colW / 2}" y="${headerH / 2 + 1}" text-anchor="middle" dominant-baseline="central" fill="#fff" font-size="11" font-weight="700" font-family="Inter,sans-serif">${escapeXml(label)}</text>`;
-  members.forEach((member, j) => {
-    svg += `<text x="${pad + 4}" y="${headerH + pad + j * rowH + 7}" dominant-baseline="central" fill="#1e293b" font-size="11" font-weight="500" font-family="Inter,sans-serif">${escapeXml(member)}</text>`;
-  });
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${colW} ${h}" width="${colW}" height="${h}">${svg}</svg>`;
 }
 
 // ── Column-card SVG (shared by groups + assign) ─────────
